@@ -1,6 +1,6 @@
 ---
 name: notebooklm-batch
-description: Batch-query all NotebookLM notebooks with the same question and export a consolidated Google Doc. Use when user wants to ask a question across multiple NotebookLM notebooks and get a summary.
+description: Use this skill when the user wants to query multiple NotebookLM notebooks with the same question and get a consolidated answer. Triggers on phrases like "使用 notebooklm 在所有筆記本查詢 X", "所有 notebook 都問 X", "notebooklm 幫我查 X", "batch query notebooks", "ask all my notebooks about X". The skill scrapes the notebook list, runs filtered batch queries via the notebooklm-mcp server (bypassing the MCP-in-Claude-Code bug), and uploads a consolidated Google Doc via the Drive MCP.
 ---
 
 # NotebookLM Batch Query Skill
