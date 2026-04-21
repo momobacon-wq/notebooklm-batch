@@ -12,7 +12,10 @@ This skill batch-queries multiple NotebookLM notebooks with the same question an
 1. `notebooklm-mcp` installed (via `npx -y notebooklm-mcp@latest` — it caches on first run)
 2. System Chrome installed (patchright uses `channel: 'chrome'`)
 3. Google authentication done — run `node scripts/auth.mjs` once and log in to the NotebookLM Google account in the browser window that opens
-4. Google Drive MCP available in current Claude Code session (claude.ai Google Drive)
+4. **rclone installed and configured for Drive upload**:
+   - Install: `winget install Rclone.Rclone` (restart shell afterward so `rclone` is on PATH)
+   - Configure: `rclone config create gdrive drive scope=drive` — opens browser, log in with the same Google account
+   - Verify: `rclone lsd gdrive:` should list Drive folders
 
 ## Workflow
 
@@ -49,38 +52,49 @@ Output format (one JSON per line):
 
 Each `answer` field is a JSON-string containing the MCP tool response. The real answer is at `JSON.parse(answer).data.answer`.
 
-### Step 3 — Format as Markdown and upload to Drive
+### Step 3 — Format as Markdown
 
-Generate a Markdown document with a table of contents and per-notebook sections, base64-encode, and upload to Google Drive as a raw `.md` file. Drive's preview pane renders Markdown, so the user can read it in the cloud without the encoding problems that plagued the previous `text/plain` → Google Doc flow.
+Generate a Markdown document with a table of contents and per-notebook sections. No truncation — the full Gemini answer for every notebook is preserved.
 
 ```bash
 INPUT="data/run-name.jsonl" TITLE="彙整文件標題" node scripts/format-markdown.mjs
 ```
 
-This writes `data/run-name.md` (readable locally) and `data/run-name.md.b64` (for upload). Then call the Google Drive MCP:
+Writes `data/run-name.md` (readable locally and the artifact we upload).
 
-```
-mcp__claude_ai_Google_Drive__create_file({
-  title: "彙整文件標題.md",
-  mimeType: "text/markdown",
-  content: <contents of run-name.md.b64>
-})
+### Step 4 — Upload to Drive via rclone
+
+```bash
+INPUT="data/run-name.md" FOLDER="NotebookLM 彙整" node scripts/upload.mjs
 ```
 
-Return the resulting Drive URL (`https://drive.google.com/file/d/{id}/view`) to the user. If they want it as an editable Google Doc, they can right-click in Drive → Open with → Google Docs.
+The script streams the file directly to Drive (no base64, no size limit), retrieves the file ID with `rclone lsf`, and prints `https://drive.google.com/file/d/{id}/view`. Return that URL to the user.
+
+Environment variables:
+- `INPUT` — local file path (required)
+- `FOLDER` — Drive folder path (default: `NotebookLM 彙整`)
+- `REMOTE` — rclone remote name (default: `gdrive`)
+- `RCLONE` — path to rclone binary (default: auto-detect PATH, fallback to winget install path)
+
+If the user wants the file as an editable Google Doc, they can right-click in Drive → Open with → Google Docs.
+
+#### Fallback: Google Drive MCP
+
+If rclone is unavailable, fall back to the old base64 + MCP flow — but note the 30000-char Bash output limit means documents larger than ~22KB markdown won't fit in one `Read` call. For anything larger, rclone is the only reliable path.
 
 #### Fallback: local Markdown only
 
-If the Drive MCP is unavailable or fails, the `data/run-name.md` file is already a complete, readable document. Tell the user the local path and they can open it in VS Code / any Markdown viewer.
+If both rclone and the Drive MCP fail, the `data/run-name.md` file is already a complete, readable document. Tell the user the local path and they can open it in VS Code / any Markdown viewer.
 
 ## Gotchas
 
-- **Prefer `text/markdown` over `text/plain`**: the old text/plain → Google Doc auto-conversion mangled Chinese characters even with BOM across many runs. Raw `.md` upload is reliable and still renders in Drive's preview pane
+- **Use rclone, not the Drive MCP**: the Drive MCP's `create_file` takes base64 `content` passed through a tool parameter, which is capped by the Bash 30000-char output limit and the Read 25000-token limit — anything beyond ~22KB of markdown won't fit. rclone streams the file directly and has no size limit.
 - **MCP tools in Claude Code don't load** (`claude mcp list` says Connected but tool schemas never appear in ToolSearch). All notebooklm-mcp calls must go through the bootstrap pattern in `batch-query.mjs` (spawn + JSON-RPC over stdio)
 - **notebooklm-mcp library is separate** from the user's Google account notebooks. The MCP's internal `list_notebooks` only lists what was added via `add_notebook`. To enumerate the actual Google account notebooks, scrape the web UI (`list-notebooks.mjs`)
 - **Each query takes 30–90s** (browser navigation + Gemini response). Don't estimate faster than 60s/notebook average
 - **Free tier NotebookLM limit: 50 queries/day.** Pro tier has no limit. Check user's account type before large batches
 - **Resume on crash**: `batch-query.mjs` writes JSONL incrementally and skips already-done ids on restart. Let this work for you — don't delete the output file between runs unless you want to redo everything
+- **Chrome profile lockfile**: if a batch run is interrupted mid-stream, the Chrome persistent context at `$LOCALAPPDATA/notebooklm-mcp/Data/chrome_profile/lockfile` may block the next run. Symptoms: every notebook fails instantly (<1s) with "Target page, context or browser has been closed". Fix: kill lingering Chrome processes whose CommandLine contains "notebooklm", then retry — the lockfile clears automatically.
 
 ## Example invocation
 
@@ -89,6 +103,6 @@ User: "幫我找所有 notebook 有關 DLN 的資料"
 1. Check `data/notebooks.json` exists — if not, run list-notebooks.mjs
 2. Filter by `氣渦輪|燃氣|燃燒|GT|DLN|NOx` (DLN is gas-turbine related — narrows 95 → ~14 notebooks)
 3. Run batch-query.mjs with the question, save to `data/dln.jsonl`
-4. Run format-markdown.mjs on the JSONL
-5. Upload via Google Drive MCP with `mimeType: text/markdown`
+4. Run format-markdown.mjs on the JSONL → `data/dln.md`
+5. Run upload.mjs on the `.md` → uploads via rclone, returns Drive URL
 6. Return the Drive URL to the user

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Convert a results JSONL to a Markdown document, base64-encoded for Drive upload.
-// Uploaded as text/markdown — Drive keeps it as raw .md and renders it in the preview pane,
-// avoiding the text/plain → Google Doc encoding issues that mangled Chinese output.
+// Convert a results JSONL to a Markdown document.
+// Output is full-fidelity (no truncation) — upload happens via rclone (scripts/upload.mjs),
+// which streams the file directly to Drive and has no size limit.
 //
 // Env vars:
 //   INPUT  - JSONL path (required)
@@ -65,17 +65,8 @@ for (const [i, row] of rows.entries()) {
   out += `---\n\n`;
 }
 
-const b64 = Buffer.from(out, 'utf8').toString('base64');
 const mdPath = INPUT.replace(/\.jsonl$/, '') + '.md';
-const b64Path = INPUT.replace(/\.jsonl$/, '') + '.md.b64';
 writeFileSync(mdPath, out);
-writeFileSync(b64Path, b64);
 
 console.log(`Markdown: ${mdPath} (${out.length} chars)`);
-console.log(`Base64 for upload: ${b64Path} (${b64.length} chars)`);
-console.log('\nNext step: upload via Google Drive MCP —');
-console.log('  mcp__claude_ai_Google_Drive__create_file({');
-console.log(`    title: "${TITLE}.md",`);
-console.log('    mimeType: "text/markdown",');
-console.log(`    content: <contents of ${b64Path}>`);
-console.log('  })');
+console.log(`\nNext step: INPUT="${mdPath}" node scripts/upload.mjs`);
