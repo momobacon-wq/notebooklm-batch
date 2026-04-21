@@ -1,11 +1,11 @@
 ---
 name: notebooklm-batch
-description: Use this skill when the user wants to query multiple NotebookLM notebooks with the same question and get a consolidated answer. Triggers on phrases like "使用 notebooklm 在所有筆記本查詢 X", "所有 notebook 都問 X", "notebooklm 幫我查 X", "batch query notebooks", "ask all my notebooks about X". The skill scrapes the notebook list, runs filtered batch queries via the notebooklm-mcp server (bypassing the MCP-in-Claude-Code bug), and uploads a consolidated Google Doc via the Drive MCP.
+description: Use this skill when the user wants to query multiple NotebookLM notebooks with the same question and get a consolidated answer. Triggers on phrases like "使用 notebooklm 在所有筆記本查詢 X", "所有 notebook 都問 X", "notebooklm 幫我查 X", "batch query notebooks", "ask all my notebooks about X". The skill scrapes the notebook list, runs filtered batch queries via the notebooklm-mcp server (bypassing the MCP-in-Claude-Code bug), and uploads a consolidated Markdown file to Google Drive for cloud reading.
 ---
 
 # NotebookLM Batch Query Skill
 
-This skill batch-queries multiple NotebookLM notebooks with the same question and uploads the consolidated answers to a Google Doc.
+This skill batch-queries multiple NotebookLM notebooks with the same question and uploads the consolidated answers as a Markdown file to Google Drive.
 
 ## Prerequisites (one-time setup)
 
@@ -49,30 +49,33 @@ Output format (one JSON per line):
 
 Each `answer` field is a JSON-string containing the MCP tool response. The real answer is at `JSON.parse(answer).data.answer`.
 
-### Step 3 — Format and upload to Google Doc
+### Step 3 — Format as Markdown and upload to Drive
 
-Generate plain text with UTF-8 BOM (critical — without BOM, Google Docs mangles Chinese characters during text/plain auto-conversion), base64-encode, and upload via the Google Drive MCP.
+Generate a Markdown document with a table of contents and per-notebook sections, base64-encode, and upload to Google Drive as a raw `.md` file. Drive's preview pane renders Markdown, so the user can read it in the cloud without the encoding problems that plagued the previous `text/plain` → Google Doc flow.
 
 ```bash
-INPUT="data/run-name.jsonl" TITLE="彙整文件標題" node scripts/format-for-upload.mjs
+INPUT="data/run-name.jsonl" TITLE="彙整文件標題" node scripts/format-markdown.mjs
 ```
 
-This writes `data/run-name.txt.b64` with the base64 content. Then call the Google Drive MCP:
+This writes `data/run-name.md` (readable locally) and `data/run-name.md.b64` (for upload). Then call the Google Drive MCP:
 
 ```
 mcp__claude_ai_Google_Drive__create_file({
-  title: "彙整文件標題",
-  mimeType: "text/plain",    // auto-converts to application/vnd.google-apps.document
-  content: <contents of run-name.txt.b64>
+  title: "彙整文件標題.md",
+  mimeType: "text/markdown",
+  content: <contents of run-name.md.b64>
 })
 ```
 
-Return the resulting `https://docs.google.com/document/d/{id}/edit` URL to the user.
+Return the resulting Drive URL (`https://drive.google.com/file/d/{id}/view`) to the user. If they want it as an editable Google Doc, they can right-click in Drive → Open with → Google Docs.
+
+#### Fallback: local Markdown only
+
+If the Drive MCP is unavailable or fails, the `data/run-name.md` file is already a complete, readable document. Tell the user the local path and they can open it in VS Code / any Markdown viewer.
 
 ## Gotchas
 
-- **UTF-8 BOM is mandatory** for Chinese content. `text/plain` → Google Doc conversion without BOM produces garbled output
-- **`text/html` does NOT auto-convert** to Google Doc via this MCP — it creates an HTML file viewable only in Drive, not editable as a Doc. Use `text/plain` with BOM instead
+- **Prefer `text/markdown` over `text/plain`**: the old text/plain → Google Doc auto-conversion mangled Chinese characters even with BOM across many runs. Raw `.md` upload is reliable and still renders in Drive's preview pane
 - **MCP tools in Claude Code don't load** (`claude mcp list` says Connected but tool schemas never appear in ToolSearch). All notebooklm-mcp calls must go through the bootstrap pattern in `batch-query.mjs` (spawn + JSON-RPC over stdio)
 - **notebooklm-mcp library is separate** from the user's Google account notebooks. The MCP's internal `list_notebooks` only lists what was added via `add_notebook`. To enumerate the actual Google account notebooks, scrape the web UI (`list-notebooks.mjs`)
 - **Each query takes 30–90s** (browser navigation + Gemini response). Don't estimate faster than 60s/notebook average
@@ -86,6 +89,6 @@ User: "幫我找所有 notebook 有關 DLN 的資料"
 1. Check `data/notebooks.json` exists — if not, run list-notebooks.mjs
 2. Filter by `氣渦輪|燃氣|燃燒|GT|DLN|NOx` (DLN is gas-turbine related — narrows 95 → ~14 notebooks)
 3. Run batch-query.mjs with the question, save to `data/dln.jsonl`
-4. Run format-for-upload.mjs on the JSONL
-5. Upload via Google Drive MCP with `mimeType: text/plain`
-6. Return the Google Docs URL to the user
+4. Run format-markdown.mjs on the JSONL
+5. Upload via Google Drive MCP with `mimeType: text/markdown`
+6. Return the Drive URL to the user
