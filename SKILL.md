@@ -21,7 +21,7 @@ This skill batch-queries multiple NotebookLM notebooks with the same question an
 
 When the user asks something like "對所有 NotebookLM 筆記本問 XXX 然後統整":
 
-**Steps 1-4 are mandatory and must all run.** Do not stop after the batch query to ask whether to format or upload — the deliverable is the Drive URL, so `format-markdown.mjs` and `upload.mjs` always follow `batch-query.mjs`. You can report an early finding mid-batch, but still complete the format + upload at the end. The only time to stop short is if every step 2 result failed (e.g. Chrome lockfile) — in that case fix the root cause and retry, don't skip to reporting.
+**Steps 1-5 are mandatory and must all run.** Do not stop after the batch query to ask whether to format, synthesise, or upload — the deliverable is the Drive URL, so `format-markdown.mjs` → synthesis prepend → `upload.mjs` always follow `batch-query.mjs`. You can report an early finding mid-batch, but still complete the full pipeline at the end. The only time to stop short is if every step 2 result failed (e.g. Chrome lockfile) — in that case fix the root cause and retry, don't skip to reporting.
 
 ### Step 1 — List notebooks (only if not cached)
 
@@ -56,13 +56,30 @@ Each `answer` field is a JSON-string containing the MCP tool response. The real 
 
 ### Step 3 — Format as Markdown
 
-Generate a Markdown document with a table of contents and per-notebook sections. No truncation — the full Gemini answer for every notebook is preserved.
+Generate a Markdown document with a table of contents and per-notebook sections. No truncation — the full Gemini answer for every notebook is preserved. The script automatically:
+
+- **Cleans NotebookLM's broken formatting**: rejoins units split across lines (`∘\nC` → `°C`, `m\n\n/h` → `m³/h`), strips bare-digit lines left over from citation markers, rejoins orphaned punctuation (`\n。` → `。`), and collapses 3+ consecutive blank lines to a single blank line. Decimals like `20.8 MPa` are preserved — the clean rules deliberately avoid mid-sentence digit stripping.
+- Skips notebooks whose answer was "no relevant content" (heuristic detection) or that returned an error, and lists them in a collapsed "已略過" appendix at the end. They do **not** appear in the TOC or body.
+- Reports `有效筆記本數: N / total` at the top so the user sees how many notebooks had usable content.
 
 ```bash
 INPUT="data/run-name.jsonl" TITLE="彙整文件標題" node scripts/format-markdown.mjs
 ```
 
 Writes `data/run-name.md` (readable locally and the artifact we upload).
+
+### Step 3.5 — Synthesise across notebooks (Claude writes this)
+
+**Mandatory.** After `format-markdown.mjs` produces the per-notebook document, Claude Code reads the markdown and prepends a `## ★ 綜合整理` section directly after the title/metadata (before 目錄). This section should:
+
+- Answer the user's original question holistically by cross-referencing the best content from multiple notebooks — not just a summary of each notebook's answer.
+- Use `[#n]` footnote markers pointing to the per-notebook sections (by TOC number) so the user can drill down.
+- Favour tables, checklists, and concrete numbers/parameters over prose. The goal is a deliverable the user can use immediately without reading all N notebook sections.
+- Be concise — target 2000–5000 chars. The per-notebook sections below it are still available for depth.
+
+Prepend via the `Edit` tool using the existing `- 產出時間: ...\n\n---\n\n## 目錄` boundary as the anchor. Do **not** rewrite the entire file.
+
+If the answer is highly technical (engineering, finance, medical), the synthesis should itself be structured like a working document (e.g. a course outline for teaching requests, a decision matrix for comparison questions, a checklist for troubleshooting questions) — match the artefact to what the user intends to do with it.
 
 ### Step 4 — Upload to Drive via rclone
 
