@@ -21,6 +21,8 @@ This skill batch-queries multiple NotebookLM notebooks with the same question an
 
 When the user asks something like "對所有 NotebookLM 筆記本問 XXX 然後統整":
 
+**Steps 1-4 are mandatory and must all run.** Do not stop after the batch query to ask whether to format or upload — the deliverable is the Drive URL, so `format-markdown.mjs` and `upload.mjs` always follow `batch-query.mjs`. You can report an early finding mid-batch, but still complete the format + upload at the end. The only time to stop short is if every step 2 result failed (e.g. Chrome lockfile) — in that case fix the root cause and retry, don't skip to reporting.
+
 ### Step 1 — List notebooks (only if not cached)
 
 ```bash
